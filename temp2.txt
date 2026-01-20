@@ -1,0 +1,307 @@
+const OVERLAY_ID = "focus-overlay-root";
+
+// Sites you asked for
+const BLOCKED_HOSTS = new Set([
+  "www.youtube.com",
+  "m.youtube.com",
+  "youtube.com",
+  "www.instagram.com",
+  "instagram.com",
+  "www.facebook.com",
+  "facebook.com"
+]);
+
+const SNOOZE_MINUTES = 5;
+
+// Add as many as you want (must exist under /images/)
+const IMAGE_POOL = ["images/1.jpg", "images/2.jpg", "images/3.jpg"];
+
+function getHostKey() {
+  return location.hostname.toLowerCase();
+}
+
+function isBlockedHost(host) {
+  if (BLOCKED_HOSTS.has(host)) return true;
+  // Handle subdomains like "web.facebook.com" if needed
+  if (host.endsWith(".youtube.com")) return true;
+  if (host.endsWith(".instagram.com")) return true;
+  if (host.endsWith(".facebook.com")) return true;
+  return false;
+}
+
+function pickRandomImageUrl() {
+  const choice = IMAGE_POOL[Math.floor(Math.random() * IMAGE_POOL.length)];
+  return chrome.runtime.getURL(choice);
+}
+
+function nowMs() {
+  return Date.now();
+}
+
+async function getSnoozeMap() {
+  const data = await chrome.storage.local.get(["snoozedUntilByHost"]);
+  return data.snoozedUntilByHost ?? {};
+}
+
+async function setSnooze(host, untilMs) {
+  const map = await getSnoozeMap();
+  map[host] = untilMs;
+  await chrome.storage.local.set({ snoozedUntilByHost: map });
+}
+
+async function isSnoozed(host) {
+  const map = await getSnoozeMap();
+  const until = map[host];
+  return typeof until === "number" && until > nowMs();
+}
+
+function ensureNoDuplicateOverlay() {
+  const existing = document.getElementById(OVERLAY_ID);
+  if (existing) existing.remove();
+}
+
+function disableScroll(disable) {
+  const html = document.documentElement;
+  const body = document.body; // can be null at document_start
+
+  if (disable) {
+    // store previous overflow values safely
+    html.dataset.__focusOverlayScrollHtml = html.style.overflow || "";
+    html.style.overflow = "hidden";
+
+    if (body) {
+      body.dataset.__focusOverlayScrollBody = body.style.overflow || "";
+      body.style.overflow = "hidden";
+    }
+  } else {
+    html.style.overflow = html.dataset.__focusOverlayScrollHtml ?? "";
+    delete html.dataset.__focusOverlayScrollHtml;
+
+    if (body) {
+      body.style.overflow = body.dataset.__focusOverlayScrollBody ?? "";
+      delete body.dataset.__focusOverlayScrollBody;
+    }
+  }
+}
+
+
+function createOverlay() {
+  ensureNoDuplicateOverlay();
+
+  const root = document.createElement("div");
+  root.id = OVERLAY_ID;
+  root.style.position = "fixed";
+  root.style.inset = "0";
+  root.style.zIndex = "2147483647";
+  root.style.pointerEvents = "auto";
+
+  // Shadow DOM for CSS isolation
+  const shadow = root.attachShadow({ mode: "open" });
+
+  const imgUrl = pickRandomImageUrl();
+  const host = getHostKey();
+
+  shadow.innerHTML = `
+    <style>
+      :host { all: initial; }
+      .backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0,0,0,0.72);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      }
+      .card {
+        width: min(920px, 100%);
+        background: rgba(255,255,255,0.06);
+        border: 1px solid rgba(255,255,255,0.14);
+        border-radius: 20px;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+      }
+      @media (max-width: 800px) {
+        .card { grid-template-columns: 1fr; }
+      }
+      .left {
+        min-height: 360px;
+        background: #111;
+        position: relative;
+      }
+      .left img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        filter: saturate(1.05) contrast(1.05);
+      }
+      .left::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, rgba(0,0,0,0.25), rgba(0,0,0,0.65));
+      }
+      .right {
+        padding: 22px 22px 18px;
+        color: rgba(255,255,255,0.92);
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        background: rgba(15,15,15,0.55);
+        backdrop-filter: blur(10px);
+      }
+      .kicker {
+        font-size: 12px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.65);
+      }
+      .title {
+        font-size: 28px;
+        line-height: 1.15;
+        margin: 0;
+      }
+      .desc {
+        font-size: 14px;
+        line-height: 1.5;
+        color: rgba(255,255,255,0.72);
+        margin: 0;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255,255,255,0.16);
+        background: rgba(255,255,255,0.06);
+        width: fit-content;
+        font-size: 13px;
+        color: rgba(255,255,255,0.75);
+      }
+      .actions {
+        margin-top: 6px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+      button {
+        border: 1px solid rgba(255,255,255,0.18);
+        background: rgba(255,255,255,0.08);
+        color: rgba(255,255,255,0.9);
+        padding: 10px 12px;
+        border-radius: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      button:hover { background: rgba(255,255,255,0.12); }
+      .primary {
+        background: rgba(255,255,255,0.16);
+      }
+      .danger {
+        border-color: rgba(255,80,80,0.35);
+        background: rgba(255,80,80,0.12);
+      }
+      .danger:hover { background: rgba(255,80,80,0.18); }
+      .footer {
+        margin-top: auto;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        font-size: 12px;
+        color: rgba(255,255,255,0.55);
+      }
+      a { color: rgba(255,255,255,0.75); text-decoration: underline; }
+    </style>
+
+    <div class="backdrop" role="dialog" aria-modal="true">
+      <div class="card">
+        <div class="left">
+          <img src="${imgUrl}" alt="Motivational"/>
+        </div>
+        <div class="right">
+          <div class="kicker">Focus Check</div>
+          <h1 class="title">You opened <span style="opacity:.85">${host}</span>.</h1>
+          <p class="desc">If this is intentional, you can continue. If not, close the tab and return to your main task.</p>
+          <div class="pill">Tip: Snooze is per-site for ${SNOOZE_MINUTES} minutes.</div>
+
+          <div class="actions">
+            <button class="primary" id="dismissBtn">Continue anyway</button>
+            <button id="snoozeBtn">Snooze ${SNOOZE_MINUTES} min</button>
+            <button class="danger" id="closeBtn">Close tab</button>
+          </div>
+
+          <div class="footer">
+            <span>Overlay shows every visit.</span>
+            <span>Press <b>Esc</b> to dismiss.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Wire actions
+  const dismissBtn = shadow.getElementById("dismissBtn");
+  const snoozeBtn = shadow.getElementById("snoozeBtn");
+  const closeBtn = shadow.getElementById("closeBtn");
+
+  function remove() {
+    disableScroll(false);
+    root.remove();
+    window.removeEventListener("keydown", onKeyDown, true);
+  }
+
+  async function onSnooze() {
+    const until = nowMs() + SNOOZE_MINUTES * 60 * 1000;
+    await setSnooze(host, until);
+    remove();
+  }
+
+  function onCloseTab() {
+    chrome.runtime.sendMessage({ type: "CLOSE_TAB" });
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "Escape") remove();
+  }
+
+  dismissBtn?.addEventListener("click", remove);
+  snoozeBtn?.addEventListener("click", onSnooze);
+  closeBtn?.addEventListener("click", onCloseTab);
+  window.addEventListener("keydown", onKeyDown, true);
+
+  // Add to page
+  disableScroll(true);
+  document.documentElement.appendChild(root);
+}
+
+async function maybeShowOverlay() {
+  const host = getHostKey();
+  if (!isBlockedHost(host)) return;
+
+  // Don’t show if snoozed
+  if (await isSnoozed(host)) return;
+
+  // Show every time (as you requested)
+  createOverlay();
+}
+
+// Run ASAP
+maybeShowOverlay();
+
+// Handle SPA navigations (YouTube etc.) that change URL without reload
+let lastHref = location.href;
+setInterval(() => {
+  if (location.href !== lastHref) {
+    lastHref = location.href;
+    // show overlay on every navigation too (still matches your “every time”)
+    maybeShowOverlay();
+  }
+}, 700);

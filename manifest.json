@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Focus Overlay Reminder",
+  "version": "1.0.0",
+  "description": "Shows a motivational overlay on distracting sites with snooze + close tab.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "*://*.youtube.com/*",
+    "*://*.instagram.com/*",
+    "*://*.facebook.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.youtube.com/*",
+        "*://*.instagram.com/*",
+        "*://*.facebook.com/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["images/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
